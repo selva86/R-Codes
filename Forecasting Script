@@ -1,0 +1,783 @@
+#####################################################################################################################################
+#Project: Demand Forecasting 
+#Authors: Selva Prabhakaran
+#Date: 04 November 2013
+#Purpose: Forecasting R Code
+#####################################################################################################################################
+
+gc()
+### SECTION 0: LOAD LIBRARIES
+library(leaps)
+library(evd)
+library(alr3)
+library(DAAG)
+library(car)
+library(MASS)
+library(cvTools)
+library(forecast)
+library(relaimpo)
+library(lmtest)
+
+# Java setting to increase memory size. In this case, 4GB
+options (java.parameters = "-Xmx4096m ")
+
+# Set the working directory. All files will be created in this directory
+setwd("C:\\Users\\sanjes\\Desktop\\IA\\TTT Forecasting\\December\\D6N")
+
+#Set Input datafile
+datafile <- "D6N_All20082013.csv"
+
+### SECTION 1: SET PARAMETERS
+
+criterion <- "adjr2"
+no.best <- 10	
+no.predictors <- 30
+max.pow <- 2					
+store.graphs <- FALSE			
+TimeSeriesMethod <- "hw"	#"hw" / "Arima"	/ "HoltWinters"	
+data.start.year <- 2008
+data.start.month <- 1
+no.forecasts <- 13	
+vars.per.model = 4				
+obs.dropped.per.validation = 1
+validate.till.obs = 2
+no.vars <- 8					
+stps <- 15
+plottimeseries <- TRUE
+Print.All.Models <- FALSE
+PrintInputFile <- TRUE
+seasonaltype <- "multiplicative"
+writeInputAnalysis <- FALSE
+inpAnalysisFName <- "FileAnalysis.txt"
+enable.weights <- FALSE
+weight.alpha <- 0.005
+remove.lags.from.same.predictor <- TRUE
+remove.high.correlation.count <- TRUE
+filter.high.VIFs <- FALSE
+store.ccf <- FALSE
+enable.timeseries.regression <- FALSE
+store.validation.graphs <- FALSE
+subset.method <- "bestsubsets"
+outlier.treatment <- "FALSE"		#"USE DUMMY VAR"/"FALSE"
+
+names(read.csv(datafile))
+exclude.vars <- c(14, 12, 13, 8, 4)			# set to the column number of  the variables to be excluded in 'orig'
+
+
+## SECTION 2: INPUT DATA
+
+exceloutput <- data.frame() 
+devOutput <- data.frame() 
+
+# For each period of validation...
+training.period.goback = 0
+
+
+
+for (training.period.goback in seq(0,validate.till.obs, obs.dropped.per.validation)){
+
+	# Set up the name of the output file
+	output.file <- paste("All Models - ", training.period.goback,"M Drop.doc", sep = "")
+	# Set up the name of the forecast file
+	forecast.file <- paste("Best ",vars.per.model," Variable Models - Forecasts ", training.period.goback,"M Drop.txt", sep = "")
+
+	# Store original data file
+	orig <- read.csv(datafile)
+	# Store input file ("inp")
+	inp <- orig[,-exclude.vars]
+
+	# Create a dummy variable to get length of the data (through the 'date' column)
+	dummy <- as.character(inp[,1])
+	# Set input to be the input data minus the holdout at the end of the file
+	inp <- head(inp, (length(dummy) - training.period.goback))
+
+	#<># Create the seasonality Index and store it in the training dataset
+	STUcol <- inp[,2]
+	# Get the number of months (include early part of 1st year if data.start.month isn't 1)
+	noMon <- length(STUcol)
+	if(data.start.month != 1){
+		noMon <- noMon + (data.start.month - 1)
+	}
+	# Get the number of years (full)
+	noYr <- floor(noMon / 12)
+	# Get the months remaining
+	noRem <- noMon %% 12
+	# Add an extra year if we have a partial year at the end
+	if(noRem != 0){
+		noYr <- noYr + 1
+	}
+	#Variables for getting the yearly average
+	avgYr <- rep(0, noYr)
+	ctr   <- rep(0, noYr)
+	# Get the sum of all STUs per year
+	currYr <- data.start.year
+	currMo <- data.start.month
+	for(i in 1:length(STUcol)){
+		avgYr[(currYr - data.start.year)+1] = avgYr[(currYr - data.start.year)+1] + STUcol[i]
+		ctr[(currYr - data.start.year)+1] = ctr[(currYr - data.start.year)+1] + 1
+		currMo <- currMo + 1
+		if(currMo >= 13){
+			currMo <- 1
+			currYr <- currYr + 1
+		}
+	}
+	# get the average STUs for each year
+	for(i in 1:length(avgYr)){
+		avgYr[i] <- avgYr[i] / ctr[i]
+	}
+	# Change STUcol to be STUs divided by yearly average
+	currYr <- data.start.year
+	currMo <- data.start.month
+	for(i in 1:length(STUcol)){
+		STUcol[i] <- STUcol[i] / avgYr[(currYr - data.start.year)+1]
+		currMo <- currMo + 1
+		if(currMo >= 13){
+			currMo <- 1
+			currYr <- currYr + 1
+		}
+	}
+	# Get the average SI by month
+	avgMo <- rep(0,12)
+	ctr <- rep(0,12)
+	currMo <- data.start.month
+	for(i in 1:length(STUcol)){
+		avgMo[currMo] <- avgMo[currMo] + STUcol[i]
+		ctr[currMo] <- ctr[currMo] + 1
+		currMo <- currMo + 1
+		if(currMo >= 13){
+			currMo <- 1
+		}
+	}
+	for(i in 1:12){
+		avgMo[i] <- avgMo[i] / ctr[i]
+	}
+	# Set up SI column
+	SI <- rep(0, length(STUcol))
+	currMo <- data.start.month
+	for(i in 1:length(STUcol)){
+		SI[i] <- avgMo[currMo]
+		currMo <- currMo + 1
+		if(currMo >= 13){
+		  currMo = 1
+		}
+	}
+	# Add the SI column to the data
+	inp <- cbind(inp[,1:2], SI, inp[3:ncol(inp)])
+
+	#<># The next section creates a weighting column for forecasts
+	if(enable.weights == TRUE){
+		# Calculate an exponential weight based on number of observations
+		weightCol <- rep(0, length(STUcol))
+		for(i in 1:length(STUcol)){
+			weightCol[i] <- exp(weight.alpha * i)
+		}
+	}else{
+		# Otherwise, set all weights to be equal.
+		weightCol <- rep(1, length(STUcol))
+	}
+	
+	# Add the weights column to the data
+	if(enable.timeseries.regression){
+		inp <- cbind(inp[,1:3], weightCol, stu = inp[,2], inp[4:ncol(inp)])
+		}else{
+		inp <- cbind(inp[,1:3], weightCol, inp[4:ncol(inp)])
+	}
+	
+	#<># At this point, we have a "weights" column.
+	#<># The next section creates the forecasts.
+
+	# Write out the column names to a file
+	if(writeInputAnalysis){
+		write("Original Data File Data:", file=inpAnalysisFName)
+		write(colnames(inp), file=inpAnalysisFName, append=TRUE)
+	}
+
+	
+	### SECTION 2.1: TIME SERIES OPTIMIZATION
+	# Create a new date column for forecasts
+	dt <- as.Date(paste("01",data.start.month,"/",data.start.year, sep = ""), format = "%d%m/%Y")
+	dates <- seq(dt, by = "month", length.out = nrow(inp) + no.forecasts + training.period.goback)
+	temp <- (inp[,c(3:ncol(inp))])
+
+	# set output to be the date column and the STUs from the input data, padded with zeroes
+	output <- data.frame(dates, STU = c(inp[,2], rep(0, (no.forecasts + training.period.goback))))
+ 
+	for(CName in (1:ncol(temp))){
+		# Read in the column of data
+		# omit any "NA"s
+		tempCol <- temp[,CName]
+		tempCol <- tempCol[!is.na(tempCol)]
+	
+		# Create Months Column
+		mths <- as.data.frame(inp[,1]) 
+
+		# Create Time series Object of the prediction
+		ser <- ts(tempCol, frequency = 12, start=c(data.start.year,data.start.month))
+
+		# If time series is "Arima"
+		if(TimeSeriesMethod == "Arima"){
+			# Forecast the variable
+			Fi <- auto.arima(ser)
+			Fi1 <- forecast(Fi, h = (no.forecasts + length(dummy) - length(tempCol)))
+			
+			#Actuals
+			Act <- as.data.frame(ser)
+
+			# Join the columns in reqd format
+			out <- matrix(c(unlist(Act), as.numeric(unlist(Fi1[4]))), ncol = 1)
+		}
+
+		# If time series is "HoltWinters"
+		if(TimeSeriesMethod == "HoltWinters"){
+			# Holt Winters Optimized for Min SSE
+			Fi <- HoltWinters(ser, optim.start = c(alpha = 0.99, beta = 0.001, gamma =0.001), l.start = fivenum(ser)[4],  seasonal = seasonaltype) 
+			Fi1 <- forecast.HoltWinters(Fi, h=(no.forecasts + length(dummy) - length(tempCol)))
+
+			# Fitted Values
+			Fit <- as.data.frame(Fi$fitted)[,1]
+
+			# Actuals
+			Act <- as.data.frame(ser)
+
+			# Join the Columns in reqd format
+			out <- matrix(c(unlist(Act), as.numeric(unlist(Fi1[4]))), ncol = 1)
+		}
+
+		if(TimeSeriesMethod == "hw"){
+			Fi <- hw(ser, initial = "optimal",h=(no.forecasts + length(dummy) - length(tempCol)), seasonal=seasonaltype)
+						
+			Fit <- as.data.frame(Fi$fitted)[,1]
+
+			Act<-as.data.frame(ser)
+
+			out<-matrix(c(unlist(Act), as.numeric(unlist(Fi[2]))), ncol = 1)
+		}
+		
+		# Join the columns in the required foremat
+		colnames(out) <- names(temp)[CName]
+		output <- cbind(output,out) 
+	}
+
+	inp <- output
+
+	# If we want to plot the time series', plot them.
+	if(plottimeseries == TRUE && (training.period.goback == 0)){
+		for (k in c(3:ncol(inp))){
+		png(file=paste(names(inp)[k],".png",sep=""),width=900,height=550)
+			t.ser <- ts(inp[,k])
+			plot(t.ser, ylab = names(inp)[k], main = names(inp)[k], ask = TRUE, lwd = 5, cex.axis = 0.2)
+			lines(head(t.ser, length(ser)), type = "l", col = 154, lwd = 2)
+		dev.off() 
+			# wait 1 second before proceeding to next plot.
+			Sys.sleep(1) 	
+		}
+	}
+
+	### SECTION 3:  CREATE THE LEADs FOR VARIABLES IN INPUT DATA. SET PARAMETERS HERE!!
+
+	if (training.period.goback < 16){
+		startlead = 7
+	}else{
+	startlead = 5
+	}
+	startcol <- 5
+	#startlead <- 7
+	endlead <- 12				
+	no.leads <- endlead - startlead + 2		
+	RES <- data.frame(inp)				
+	FINRES <- data.frame(inp[,c(1:(startcol-1))]) 
+
+	for (i in c(startcol:ncol(RES))){
+		# Store the column in temp
+		temp <- RES[,i] 
+
+		# Store the column as a matrix
+		T <- matrix(temp, nrow= length(temp))
+		# Set up a blank matrix of the same length as the column.
+		T1 <- matrix(nrow=nrow(T))
+		# For each lead...
+		for (j in c(startlead:endlead)){
+			# create a column with that many months of "NA", followed by the actual data
+			T1 <- c(rep(NA,j),T[1:(nrow(T)-j)])
+			# Append the data to the original column
+			T <- cbind(T,T1)
+		}
+		# Set the column names of the leads to be the original name with the lead number
+		colnames(T) <- paste(rep(names(RES)[i],no.leads), c(0,startlead:endlead), sep="")
+		# Append the lead columns to the original data
+		FINRES <- (cbind(FINRES,T[,-1]))
+	}
+	FIN <- na.omit(FINRES)
+
+	s.year <- as.POSIXlt(FIN[1,1])$year +1900
+	s.month <- as.POSIXlt(FIN[1,1])$mon + 1
+
+	if(PrintInputFile && (training.period.goback == 0)){
+		write.csv(FIN, "INPUT DATA - SAVED.csv")
+	}
+
+	# Write the input names to the input analysis file
+	if(writeInputAnalysis && training.period.goback == 0){
+		write("\n\nData With Leads:", file=inpAnalysisFName, append=TRUE)
+		write(colnames(FIN), file=inpAnalysisFName, append=TRUE)
+	}
+	
+	### SECTION 3.1: REMOVE -ve CORRELATION VARIABLES
+	row.length <- length(FIN[FIN[,2] != 0,2])
+	cr <- t(cor(FIN[1:row.length,2],FIN[1:row.length,c(3:ncol(FIN))]))
+
+	# Keep only the columns that have a positive correlation to the response variable
+	FIN <- FIN[ ,c(1,2, (which(cr[,1] > 0.1)+2))] 
+
+	cor.mat <- cor(FIN[,c(4:ncol(FIN))],FIN[,c(4:ncol(FIN))])
+
+	if(remove.high.correlation.count){
+
+		#write.csv(cor.mat, "cor.mat-orig.csv")
+		count.vector <- integer(nrow(cor.mat))
+		
+		for(i in c(1:length(count.vector))){
+			count.vector[i] <- sum(cor.mat[i,] > 0.975)
+		}
+			
+		# eliminate variables with large number of correlations with other variables
+		xx = 1
+	
+		# while we have any correlations over 0.975...
+		while(max(count.vector) > 1){
+			# Calculate the correlation matrix
+			cor.mat <- cor(FIN[,c(4:ncol(FIN))],FIN[,c(4:ncol(FIN))])
+
+			# Create 'Count' variable
+			count.vector <- integer(nrow(cor.mat))
+		
+			# Count the number of correlations over 0.975
+			for(i in c(1:length(count.vector))){
+				count.vector[i] <- sum(cor.mat[i,] > 0.975)
+			}
+
+			#Remove the first variable with maximum cross correlation > (0.975)
+			for(i in c(1:length(count.vector))){
+				if(count.vector[i] == max(count.vector)){
+					print(paste(rownames(cor.mat)[i], count.vector[i]))
+					FIN[,rownames(cor.mat)[i]] <- NULL
+					xx <- xx + 1	
+					break
+				}
+			}
+		}	
+	}
+   	 #write.csv(cor.mat, "cor.mat.csv")
+	
+	#Create a s.test copy of teh data file without the endng rows in the data
+	s.test <- FIN[ c(1:(length(na.omit(orig[,2])) - endlead)),]
+
+	# This line makes a weightCol variable the same length as s.test
+	weightCol2 <- weightCol[1:nrow(s.test)]
+
+	# Write the input analysis, noting which variables still remain.
+	if(writeInputAnalysis && training.period.goback == 0){
+		write("\n\nData After Negative Correlation removal:", file=inpAnalysisFName, append=TRUE)
+		write(colnames(FIN), file=inpAnalysisFName, append=TRUE) 
+	}
+
+	### SECTION 4: VARIABLE SELECTION USING FORWARD STEPWISE!
+	sel.vars <- character()
+	start <- 3	
+
+	# For each set of N variables (N= no.vars)...
+	for (p in seq(start, ncol(s.test), by = round(no.vars))){
+		# ... set preds to be the names of all the columns in the set
+		preds <- paste(names(s.test[,c(p: min(no.vars+p-1, ncol(s.test)))]),sep="", collapse = " + ")		
+		# If the list of names is not blank...
+		if (preds != ""){  
+			# Create a formula for all predictors in preds
+			fm <- paste("(",colnames(s.test)[2]," ~ ",preds,")",sep = "")	
+			# Create a formula for a base model
+			base.fm <- paste("(",colnames(s.test)[2]," ~ ",1,")",sep = "")
+			# Create a base model
+			base.mod <- lm(as.formula(base.fm), data= as.data.frame(s.test), weights = weightCol2)  			
+			# Create a model for predictors
+			all.mod <- lm(as.formula(fm), data= as.data.frame(s.test),  weights = weightCol2)	  			 	
+			# Run stepwise selection
+			stfw <- step(base.mod, scope = list(lower = base.mod, upper = all.mod), direction = "both", trace = 1, steps  = stps)
+			# Append the selected variables to the sel.vars list
+			sel.vars <- rbind(sel.vars,names(unlist(stfw[[1]])))
+		}
+	}
+
+	# Unstack the selected variables
+	sel.vars <- matrix(sel.vars, ncol = 1)
+	# Remove any duplicate variables and the "(Intercept)"s.
+	sv <- sort(unique(sel.vars[which(sel.vars != "(Intercept)")]))
+
+	if(remove.lags.from.same.predictor){
+	#Algo to remove lags from same predictor that has reltively lesser correlation
+	to.be.removed <- c()
+	for(u in c(1:length(sv))){
+		for(v in c(1:length(sv))){
+			var1 = sv[u]
+			var2 = sv[v]
+			if((length(agrep(var1,var2))) > 0 && (nchar(var1)>2)){	#if there is a match
+				dependent = s.test[,2]
+				pred1 = s.test[,var1]
+				pred2 = s.test[,var2]
+				cor1 = cor(pred1,dependent)
+				cor2 = cor(pred2,dependent)
+				if(cor1 > cor2 && u != v){
+					to.be.removed <- c(to.be.removed, v)
+					
+				}
+			}
+		}
+	}
+	sv <- sv[-to.be.removed]	#Remove duplicate lags
+	}
+	
+	# Filtering Variables with high VIF
+	if(filter.high.VIFs){
+		preds <- paste(sv,sep="", collapse = " + ")
+		fm <- paste("(",colnames(s.test)[2]," ~ ",preds,")",sep = "")
+		# Create a linear model (LM) and a robust linear model (RLM)
+		rg <- lm(as.formula(fm), data= as.data.frame(s.test))
+		vf <- vif(rg)
+		sv <- names(vf[vf < 100])
+	}
+
+
+	# Extract the selected variables and store them in "test", a holdout data frame for final forecasts
+	test <- cbind(s.test[,c(1:(start-1))],s.test[,paste(sv, sep = "")])
+
+	# Drop the last N rows from the data to make the new training data, "ip"
+	ip <- head(test, (nrow(test)-training.period.goback))
+ 
+	# Write to input analysis, noting variables remaining
+	if(writeInputAnalysis && training.period.goback == 0){
+		write("\n\nData After Stepwise Selection:", file=inpAnalysisFName, append=TRUE)
+		write(colnames(ip), file=inpAnalysisFName, append=TRUE) 
+	}
+	
+	### SECTION 4.1: MANUAL VARIABLE SELECTION / DROPPING (Optional)
+	names(test)
+
+	# Resolve Dates
+	dt <- as.Date(paste("01",s.month,"/",s.year, sep = ""), format = "%d%m/%Y")
+	dates <- seq(dt, by = "month", length.out = nrow(ip) + no.forecasts + training.period.goback)
+	testdates <- seq(dt, by = "month", length.out = nrow(ip))
+
+	### SECTION 5: TEST FOR LINEAR DEPENDENCE. Removes duplicated / linearly dep columns. 
+	# Method: If all the columns are lin.independent, the rank of the matrix will be the same when each column is individually  removed.
+	w <- ip[,3:ncol(ip)]
+	#create a rankifremoved vector, where at least 1 value is different from the rest.
+	rankifremoved <- c(1, integer(ncol(w)-1))
+
+
+	rankifremoved <- sapply(1:ncol(w),function(x) qr(w[,-x])$rank)
+	if(!all(rankifremoved[1] == rankifremoved)){
+		w <- w[,-which(rankifremoved == max(rankifremoved))[1]]
+	}
+
+	# Write to input analysis, noting variables remaining
+	if(writeInputAnalysis && training.period.goback == 0){
+		write("\n\nData After Linear Dependence Test:\n", file=inpAnalysisFName, append=TRUE)
+		write(colnames(w), file=inpAnalysisFName, append=TRUE) 
+	}
+	
+	### SECTION 6: VARIABLE POWER TRANSFORMATION - Does not allow inverse powers
+	# Logic: if the power is > max.pow, use:1; If 0 < power <= 1, use round(pow,2); else use round(pow)  
+	
+	# Store the raw powers and the powers modified by the logic above
+	pws <- integer(ncol(w))
+	raw <- integer(ncol(w))
+	# For each variable...
+	for(j in (1:ncol(w))){
+	# Get the invTranestimate
+		raw[j] <- invTranEstimate(w[,j],ip[,2])$lambda
+		pow <- invTranEstimate(w[,j],ip[,2])$lambda
+		# Apply the logic and store the result
+		if(abs(round(pow)) <= max.pow & (round(pow)) >= 1){
+			pws[j] <- round(invTranEstimate(w[,j],ip[,2])$lambda)
+		}else if(abs(pow) <= 1 & pow > 0 ){
+			pws[j] <- round(invTranEstimate(w[,j],ip[,2])$lambda,2)
+		} else {
+			pws[j] <- 1
+		}
+	}
+ 
+	# Create new input dataframe
+	ip <- cbind(ip[,c(1:2)],w)
+
+	### SECTION 7: LEAPS - N BEST REGRESSION MODELS CREATION
+	# Leaps
+	if(Print.All.Models){
+		# Run leaps on the remaining variables, using the STU as the response variable
+		rip <- leaps(x = w ,y = ip[,2],  names = colnames(w), nbest = no.best ,method = criterion)
+		# Put all outputs into the output file
+		sink(output.file)
+		# Run Leaps Models, LM, Robust LM and Forecast
+		# For row in the leaps results...
+		for(i in (1:nrow(rip$which))){
+			# Create a formula using those variables
+			preds <- paste("I(",names(which(rip$which[i,]!= "FALSE")),"^",as.character(pws[which(rip$which[i,]!=  "FALSE")]),")",sep="", collapse = " + ")
+			fm <- paste("(",colnames(ip)[2]," ~ ",preds,")",sep = "")
+			# Create a linear model (LM) and a robust linear model (RLM)
+			rg <- lm(as.formula(fm), data= as.data.frame(ip), weights = weightCol2[1:nrow(ip)])  				 					
+			rrg <- rlm(as.formula(fm), data= as.data.frame(ip), weights = weightCol2[1:nrow(ip)])
+ 
+			## Outlier Treatment
+			if(outlier.treatment == "USE DUMMY VAR"){
+				# Get the Cook's distance for the linear regression
+				cdr <- cooks.distance(rg)
+				# Bind the Cook's distance to the input data
+				a <- cbind(ip, cdr)
+				# Create Dummy Variable to be forced into regression
+				Out.Var <- rep(1,nrow(ip))
+				x <- a[,ncol(a)] > (4/(nrow(ip)))
+				Out.Var[x] <- 0
+
+				# Re-fit model with dummy outlier variable included.
+				fm <- paste("(",colnames(ip)[2]," ~ ",preds," + Out.Var",")",sep = "")					 							
+ 
+				# Create Formula 
+				rg <- lm(as.formula(fm), data= as.data.frame(ip), weights = weightCol2[1:nrow(ip)]) 			 					 			
+				rrg <- rlm(as.formula(fm), data= as.data.frame(ip), weights = weightCol2[1:nrow(ip)])		
+
+				# Calculate the relative importance of the inputs of the regression
+				impo <- calc.relimp(rg,type=c("lmg"), rela=TRUE) 
+			}		
+
+			# Store the Actual and Predicted 
+		    out <- data.frame(actuals = ip[,2] ,predicted.robust = round(predict(rrg, ip)), predicted.lm = round(predict(rg,  ip)))	
+
+			# Get the percent deviations of the linear model and robust linear model
+			robdev <- as.numeric(as.matrix(out[1:nrow(ip),2])) - as.numeric(as.matrix(out[1:nrow(ip),1]))  	
+			lmdev <- as.numeric(as.matrix(out[1:nrow(ip),3]))- as.numeric(as.matrix(out[1:nrow(ip),1]))    	
+			deviation <- cbind(robdev, lmdev)  										 		
+			devperc.rob <- sprintf("%1.2f%%" , deviation[,1]/as.numeric(as.matrix(out[1:nrow(ip),1])) * 100) 	
+			devperc.lm <- sprintf("%1.2f%%" , deviation[,2]/as.numeric(as.matrix(out[1:nrow(ip),1])) * 100)  	
+
+			# Add the deviations to the output
+			devperc <- cbind(rob.lm.dev = c(devperc.rob, rep("-", (nrow(out) - length(devperc.rob)))), lm.dev = c (devperc.lm, rep("-", (nrow(out) - length (devperc.lm)))))
+			out <- cbind(testdates, out, devperc)
+
+			# Get maximum deviation in the predicted duration
+			devp <- as.numeric(deviation[,1]/as.numeric(as.matrix(out[1:nrow(ip),1])) * 100) 
+
+			# If we chose to store the actual vs. predicted graphs, generate the graphs and store them
+			if (store.graphs == "TRUE"){
+				# Set the margins of the graph
+				par(mar = c(4,4,4,1))
+				# Set up output to PNG.
+				png(file=paste("Model ",i,".png",sep=""),width=900,height=550)
+				# Plot the actual vs predicted and set parameters of the graph
+				pic <- plot(c(1:nrow(ip)), out[,2], type = "b", cex.axis = 0.5, lwd = 2, xlab = "Year-Month", ylab =  "Demand", sub = paste("Plot from: ",ip[1,1] ," to ",ip [nrow(ip),1] ,sep = ""), main = paste("Model ",i,", No. Forecasts: ", (nrow (ip)-nrow(ip)),sep=""))
+				text(12,((max(out[,c(2:4)])-min(out[,c(2:4)]))/2)+10,print(paste(names(which(rip$which[i,]!=  "FALSE")),as.character(pws[which(rip$which[i,]!=  "FALSE")]),sep="\n", collapse = " ")),  adj = 1)
+				box("figure")
+				lines(out[,3], col = "red", lwd = 2)
+				lines(out[,4], col = "blue", lwd = 2)
+				legend("bottomright", inset=.01, c("Actual","Robust", "linear"), fill=c(1,4,2), horiz=TRUE, cex=0.75  )
+				# End output to PNG
+				dev.off()
+			}
+
+			# PRINT THE OUTPUT
+			cat("Model",i,"\n")
+			print(summary(rg))
+			print(vif(rg))
+			print(out)
+			cat("------------------------------------------------------------------- \n")
+		}
+
+		# close the output file
+		sink()
+	}
+
+	### SECTION 9.02: FORECASTING FOR SELECTED MODELS
+
+	#Retrieve the best models, based on Adjusted R2
+	models <- seq((vars.per.model - 1)*no.best+1, vars.per.model*no.best)
+ 
+	# Set up the test data
+	ip <- ip
+	tes <- FIN
+
+	#Store Cross Correlation Function
+	if(store.ccf && (training.period.goback == 0)){
+		par(mar = c(4,4,4,1))
+
+		for(k in c(3:ncol(ip))){
+			png(file=paste("CCF of ",paste(names(ip)[c(2,k)],collapse = " Vs "),".png",sep=""),width=900,height=550)
+			ccf(ip[,2],ip[,k],main = paste(names(ip)[c(2,k)],collapse = " Vs "))
+			dev.off()
+		}	
+	}
+
+	# Set "w" as the predictors in the input data set
+	w <- ip[,3:ncol(ip)]
+	# Run leaps again. it should produce the same results as above.
+	if(subset.method == "leaps"){
+		rip <- leaps(x=w ,y=ip[,2], names = colnames(w), nbest = no.best ,method = criterion)
+	} else if(subset.method == "bestsubsets"){
+		rip <- regsubsets(x=w ,y=ip[,2], names = colnames(w), nbest = no.best, really.big = T)
+		if(training.period.goback == 0){
+			png(file=paste("Best Subsets Plot.png",sep=""),width=1400,height=900)
+			par(oma = c(7,3,.1,.1))
+			plot(rip, scale="r2", cex.axis = 0.5)
+			dev.off()
+		}
+		rip <- summary(rip)
+		rip$which[,-1] -> rip$which	#removing the intercept
+	}
+
+
+	# Output all results to the forecast file
+	sink(forecast.file)
+	for(i in models){
+		# As above, create the formula...
+		preds <- paste("I(",names(which(rip$which[i,]!= "FALSE")),"^",as.character(pws[which(rip$which[i,]!=  "FALSE")]),")",sep="", collapse = " + ")
+		fm <- paste("(",colnames(ip)[2]," ~ ",preds,")",sep = "")								 				
+ 
+		# Create the linear model and robust linear model...
+		rg <- lm(as.formula(fm), data= as.data.frame(ip), weights = weightCol2[1:nrow(ip)])					 		 			
+		rrg <- rlm(as.formula(fm), data= as.data.frame(ip), weights = weightCol2[1:nrow(ip)])				 	 				
+		#get the relative importance of each variable
+		e <- simpleError("test error")
+		tryCatch( impo <- calc.relimp(rg,type=c("lmg"), rela=TRUE), error = function(e)e, finally = print("No importance"))
+
+		#impo <- calc.relimp(rg,type=c("lmg"), rela=TRUE) 
+
+		if(outlier.treatment == "USE DUMMY VAR"){
+			# Get the Cook's distance for the linear regression
+			cdr <- cooks.distance(rg)
+			# Bind the Cook's distance to the input data
+			a <- cbind(ip, cdr)
+			# Create Dummy Variable to be forced into regression
+			Out.Var <- rep(1,nrow(ip))
+			x <- a[,ncol(a)] > (4/(nrow(ip)))
+			Out.Var[x] <- 0
+
+			# Re-fit model with dummy outlier variable included.
+			fm <- paste("(",colnames(ip)[2]," ~ ",preds," + Out.Var",")",sep = "")						 						
+
+			# Create Formula 
+			rg <- lm(as.formula(fm), data= as.data.frame(ip), weights = weightCol2[1:nrow(ip)]) 				 				 			
+			rrg <- rlm(as.formula(fm), data= as.data.frame(ip), weights = weightCol2[1:nrow(ip)])		
+
+			# Calculate the relative importance of the inputs of the regression
+			e <- simpleError("test error")
+			tryCatch( impo <- calc.relimp(rg,type=c("lmg"), rela=TRUE), error = function(e)e, finally = print("No importance"))
+
+			#impo <- calc.relimp(rg,type=c("lmg"), rela=TRUE) 
+		}
+
+		# As above, get the percent deviation for the linear and robust linear models
+		new.actuals <- na.omit(orig[,2])[-c(1:endlead)] 
+
+		# Alter the output depending on outlier detection/correction
+		if(outlier.treatment == "USE DUMMY VAR"){
+			out <- data.frame(Actual = as.numeric(c(new.actuals, rep("", no.forecasts))) ,Pred.Rob = round(predict(rrg,  cbind(tes, Out.Var = c(Out.Var, rep(1,(nrow(tes) - length(Out.Var))))))), Pred.Lm = round(predict(rg, cbind(tes, Out.Var = c(Out.Var,  rep(1,(nrow(tes) - length(Out.Var))))))))	
+			Pred.cnf = round(predict(rrg, cbind(tes, Out.Var = c (Out.Var, rep(1,(nrow(tes) - length (Out.Var)))))),  interval="confidence",level=0.95)
+		}else if(outlier.treatment == "FALSE"){
+			out <- data.frame(Actual = as.numeric(c(new.actuals, rep("", no.forecasts))) ,Pred.Rob = round(predict(rrg,  tes)), Pred.Lm = round(predict(rg, tes)))	
+			Pred.cnf = round(predict(rrg, tes,  interval="confidence",level=0.95))
+		}
+		
+		# Output of actual/predicted
+		robdev <- as.numeric(as.matrix(out[1:(nrow(out)-no.forecasts),2])) - as.numeric(as.matrix(out[1:(nrow(out)-no.forecasts),1]))
+		lmdev <- as.numeric(as.matrix(out[1:(nrow(out)-no.forecasts),3]))- as.numeric(as.matrix(out[1:(nrow(out)-no.forecasts),1]))
+		deviation <- cbind(robdev, lmdev)  											 					
+		devperc.rob <- sprintf("%1.2f%%" , deviation[,1]/as.numeric(as.matrix(out[1:(nrow(out)-no.forecasts),1])) * 100)
+		devperc.lm <- sprintf("%1.2f%%" , deviation[,2]/as.numeric(as.matrix(out[1:(nrow(out)-no.forecasts),1])) * 100)
+
+		# Column bind the deviations
+		devperc <- cbind(rob.lm.dev = c(devperc.rob, rep("-", (nrow(out) - length(devperc.rob)))), lm.dev = c(devperc.lm,  rep("-", (nrow(out) - length (devperc.lm))))) 
+
+		# Put the dates, information and deviations in the output file
+ 		indicator <- c(rep("I", nrow(ip)), rep("F", no.forecasts+training.period.goback))
+
+		out <- cbind(Dates = paste(dates,indicator, sep = ""), out, devperc)	# Fit and forecast Output
+
+		# Adding Predictor's values to 'out'
+		out <- cbind(out, sapply(tes[,names(which(rip$which[i,]!= "FALSE"))], round))		
+
+		# Set names of columns
+		colnames(out) <- c(paste("Dates", sep=""), paste("Actual"),
+						   paste("RLM"),
+						   paste("LM"),
+						   paste("Dev.R"),
+						   paste("Dev.L"))
+		names(out)[7:ncol(out)] <- names(which(rip$which[i,]!= "FALSE"))		
+
+ 
+		## Output only the best models for each holdout
+		if(i %% no.best == 1){
+			if(training.period.goback == 0){		
+				exceloutput <- c(exceloutput, out[,-c(4,5,6:ncol(out))])
+				devOutput <- c(devOutput, out[,-c(2,3,4,6:ncol(out))]) 
+			}else if(training.period.goback > 0){
+				exceloutput <- c(exceloutput, data.frame(RLM = out[,3]))
+				devOutput <- c(devOutput, data.frame(Dev.R = out[,5]))
+			}
+		}
+
+		# Storing the Chart for current validation with the predictor value
+		if (store.validation.graphs){
+			
+			png(file=paste("Validation ",training.period.goback,".png",sep=""),width=1400,height=1000)
+			par(mar = c(4,4,4,12))
+			plot(out[,2], type = "o", col = "blue", lwd = 3, ylab = "STU", main = paste(training.period.goback," Months - Holdout Validation"))	
+			lines(out[,3], type = "o", col = "brown", lwd = 3)
+			lines(c(rep(NA, nrow(ip)), tail(out[,3], training.period.goback + no.forecasts)), type = "o", col = "brown3", lwd = 4)
+				
+			# Plot predictors
+			clrs <- c(32:50)
+			x <- out[,c(1,7:ncol(out))]
+			for(r in c(2:ncol(x))){
+				par(new=TRUE)
+				plot(x[,r], axes = FALSE, col = colors()[clrs[r+2]], xlab = "", ylab = "", type = "o", lwd = 0.25, cex = 0.5)
+				#text(c(1:nrow(x)),x[,2]+2.5 ,round(x[,2],1), col = 4, cex = 1)
+				axis(side=4,  cex.axis = 1, line = r, outer = F, ylim = c(0, max(x[,r])))
+				mtext(names(x)[r], side=4, line=r, cex = 1, col = colors()[clrs[r+2]])
+			}
+			legend("bottomright", inset=.01, c("Actual","Fit", "Forecast"), fill = c("blue", "brown", "brown3"), horiz=TRUE, cex=0.75 )
+			dev.off()
+		}
+
+		# As above, If we chose to store the actual vs. predicted graphs, generate the graphs and store them
+		if (store.graphs && (training.period.goback == 0)){
+			png(file=paste("Model ",i,".png",sep=""),width=900,height=550)
+			par(mar = c(4,4,4,1))
+			pic <- plot(c(1:nrow(tes)), out[,2], type = "b", cex.axis = 0.5, lwd = 2, xlab = "Year-Month", ylab =  "Demand", sub = paste("Plot from: ",tes[1,1] ," to  ",tes[nrow(tes),1] ,sep = ""), main = paste("Model ",i,", No. Forecasts: ",  (nrow(tes)-nrow(ip)),sep=""))
+			text(12,((max(out[,c(2:4)])-min(out[,c(2:4)]))/2)+10,print(paste(names(which(rip$which[i,]!=  "FALSE")),as.character(pws[which(rip$which[i,]!=  "FALSE")]),sep="\n", collapse = " ")),  adj = 1)
+			box("figure")
+			lines(out[,3], col = "red", lwd = 2)
+			lines(out[,4], col = "blue", lwd = 2)
+			legend("bottomright", inset=.01, c("Actual","Robust", "linear"), fill=c(1,4,2), horiz=TRUE, cex=0.75 )
+			dev.off()
+		}
+
+
+		# Print the output to the forecast file
+		cat("Model",i,"\n")
+		print(summary(rg))
+		cat("VIF","\n")
+		print(vif(rg))
+			
+		cat("\n",paste("Durbin Watson : ", dwt(rg)[2]))
+
+		cat("\n")
+		print(impo)
+		print(cbind(out,Pred.cnf[,-1]))
+		cat("------------------------------------------------------------------- \n")
+	}
+	
+	# Close the forecast file
+	sink()
+}
+
+# Write the excel output to a CSV
+
+exceloutput1 <- c(exceloutput, devOutput)
+write.csv(exceloutput1, "Final Validation.csv")
+print(data.frame(exceloutput1))
+ 
