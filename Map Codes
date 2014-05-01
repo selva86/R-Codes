@@ -1,0 +1,58 @@
+#Creates map in internet explorer
+#Suitable for country wise maps
+
+library(googleVis)
+
+input<-read.csv("UNdata_Export_20130419_235219481.csv")
+
+select<- input[which(input$Subgroup=="Total 5-14 yr"),]
+
+Map<- data.frame(select$Country.or.Area, select$Value)
+
+names(Map)<- c("Country", "Percentage")
+
+Geo=gvisGeoMap(Map, locationvar="Country", numvar="Percentage",
+options=list(height=350, dataMode='regions'))
+
+plot(Geo)
+
+
+#Plot Lines in Google world map. Zoomable.
+library(googleVis)
+AndrewMap <- gvisMap(Andrew, "LatLong", "Tip", options=list(showTip=FALSE, showLine=FALSE, enableScrollWheel=TRUE, mapType='terrain', useMapTypeControl=TRUE, width=1400,height=600))
+plot(AndrewMap)
+
+
+#Visualizing Table
+Table <- gvisTable(Exports, options=list(width=400, height=300))
+plot(Table)
+
+PopTable <- gvisTable(Population, options=list(width=600, height=300, page='enable'))
+plot(PopTable)
+
+#Visualize Time Series
+AnnoTimeLine  <- gvisAnnotatedTimeLine(Stock, datevar="Date", numvar="Value", idvar="Device", titlevar="Title", annotationvar="Annotation", options=list(displayAnnotations=TRUE, width=1200, height=750))
+plot(AnnoTimeLine)
+
+#Org Chart Visualization
+Org <- gvisOrgChart(Regions, options=list(width=600, height=250, size='large', allowCollapse=TRUE))
+plot(Org)
+
+#Pie Chart
+Pie <- gvisPieChart(CityPopularity)
+plot(Pie)
+
+#Meter Gauge
+Gauge <-  gvisGauge(CityPopularity, options=list(min=0, max=800, greenFrom=500, greenTo=800, yellowFrom=300, yellowTo=500, redFrom=0, redTo=300, width=400, height=300))
+plot(Gauge)
+
+#Location Map (Does not need Longitute:Latitude)
+Geo=gvisGeoChart(Exports, locationvar="Country", colorvar="Profit")
+plot(Geo)
+
+GeoMarker <- gvisGeoChart(Andrew, "LatLong", sizevar='Speed_kt', colorvar="Pressure_mb", options=list(region="US"))
+plot(GeoMarker)
+
+#Treemap
+Tree <- gvisTreeMap(Regions,  "Region", "Parent", options=list(fontSize=16))
+plot(Tree)
