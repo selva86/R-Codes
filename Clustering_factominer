@@ -1,0 +1,62 @@
+For Interactive clustering - hierarchical
+
+library(FactoMineR)
+
+###### PCA
+Expert <- read.table("http://factominer.free.fr/docs/Expert_wine.csv",header=TRUE, sep=";", row.names=1)
+
+res.pca <- PCA(Expert,quanti.sup=29:30,quali.sup=1)
+plot.PCA(res.pca,habillage=1)
+res.pca
+x11()
+barplot(res.pca$eig[,1],main="Eigenvalues",names.arg=1:nrow(res.pca$eig))
+plot.PCA(res.pca,habillage=1)
+res.pca$ind$coord
+res.pca$ind$cos2
+res.pca$ind$contrib
+dimdesc(res.pca)
+
+###### MFA
+Consumer <- read.table("http://factominer.free.fr/docs/Consumer_wine.csv",header=TRUE, sep=";", row.names=1)
+Student <- read.table("http://factominer.free.fr/docs/Student_wine.csv", header=TRUE, sep=";", row.names=1)
+Preference <- read.table("http://factominer.free.fr/docs/Preference_wine.csv", header=TRUE, sep=";", row.names=1)
+
+palette(c("black","red","blue","orange","darkgreen","maroon","darkviolet"))
+complet <- cbind.data.frame(Expert[,1:28],Consumer[,2:16],Student[,2:16],Preference)
+res.mfa <- MFA(complet,group=c(1,27,15,15,60),type=c("n",rep("s",4)),num.group.sup=c(1,5),name.group=c("Label","Expert","Consumer","Student","Preference"),graph=FALSE)
+plot(res.mfa,choix="group",cex=1.4)
+plot(res.mfa,choix="var",invisible="sup",habillage="group",cex=1.2)
+plot(res.mfa,choix="var",invisible="actif",habillage="none",lab.var=FALSE,cex=1.2)
+plot(res.mfa,choix="ind",partial="all",habillage="group",palette=palette(),cex=1.4)
+plot(res.mfa,choix="axes",habillage="group",palette=palette(),cex=1.4)
+
+##### MFA on genomics data
+comp <- read.table("http://factominer.free.fr/docs/gene.csv",sep=",",header=T,row.names=1)
+res.mfa <- MFA(comp,group=c(68,356,1),type=c(rep("s",2),"n"),name.group=c("CGH","expr","WHO"),num.group.sup=3,graph=FALSE)
+plot.MFA(res.mfa,habillage="type",lab.ind.moy=F)
+plot.MFA(res.mfa,invisible="quali.sup",partial="all",habillage="group")
+plot.MFA(res.mfa,invisible="ind",partial="all",habillage="group")
+plot.MFA(res.mfa,choix="var",habillage="group")
+plot.MFA(res.mfa,choix="var",habillage="group",lab.var=F)
+plot.MFA(res.mfa,choix="group")
+
+
+##### Hierarchical clustering
+res.hcpc <- HCPC(res.mfa)
+plot(res.hcpc,choice="map",draw.tree=F)
+plot(res.hcpc,palette=palette())
+
+
+##### Example of clustering on categorical data
+data(tea)
+res.mca <- MCA(tea,quanti.sup=19,quali.sup=20:36)
+plot(res.mca,invisible=c("var","quali.sup","quanti.sup"),cex=0.7)
+plot(res.mca,invisible=c("ind","quali.sup","quanti.sup"),cex=0.8)
+plot(res.mca,invisible=c("quali.sup","quanti.sup"),cex=0.8)
+dimdesc(res.mca)
+
+res.mca <- MCA(tea,quanti.sup=19,quali.sup=20:36, ncp=10)
+res.hcpc <- HCPC(res.mca)
+
+
+
