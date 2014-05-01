@@ -1,0 +1,38 @@
+setwd("C:\\Users\\sanjes\\Desktop\\IA\\Text Mining\\pallab");
+read.csv("200 words.csv")-> w
+read.csv("pbdes.csv")-> pd
+
+pd[which(pd[,1]==1),2]->pd1
+pd[which(pd[,1]==2),2]->pd2
+pd[which(pd[,1]==3),2]->pd3
+pd[which(pd[,1]==4),2]->pd4
+pd[which(pd[,1]==5),2]->pd5
+pd[which(pd[,1]==6),2]->pd6
+pd[which(pd[,1]==7),2]->pd7
+pd[which(pd[,1]==8),2]->pd8
+pd[which(pd[,1]==9),2]->pd9
+pd[which(pd[,1]==10),2]->pd10
+
+
+dat<- pd1
+count=0
+#res<-matrix(ncol=2, nrow = nrow(w))
+res<- data.frame()
+for(m in c(1: nrow(w))){
+count=0
+for(j in c(1:length(dat))){
+as.character(dat[j])->a
+strsplit(a, " ") -> a1
+unlist(a1) -> a1	
+
+
+t<-grep(w[m,1],a1)
+if(length(t)>0){	
+count = count + length(t)
+}
+}
+res[m,1]<-w[m,1]
+res[m,2]<-count
+}
+
+write.csv(res, "out.csv")
