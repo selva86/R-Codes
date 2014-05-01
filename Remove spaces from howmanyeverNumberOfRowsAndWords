@@ -1,0 +1,5 @@
+b<- data.frame()
+for(i in c(1:ncol(a))){
+b[i,1]<-paste(unlist(strsplit(as.character(a[1,i])," ")), collapse=".")
+}
+write.csv(b, "names.csv")
