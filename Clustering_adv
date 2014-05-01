@@ -1,0 +1,30 @@
+library(cluster)
+clso<-read.csv("C:/Users/sanjes/Desktop/IA/Supplier Performance 2 (Delloite)/Research/Supplier_Performance_OTS/OTS_Clus_Newrank.csv")
+clso[!is.na(clso)[,6],c(2,3)]->cls
+clso[!is.na(clso)[,6],-c(2,3)]->clsr
+
+clust<-function(data = cls, nclus = 4, xcol= 1, ycol = 2, ...){
+pam(data, nclus) -> pcls	#Partition Around Medoid
+cbind(data, pcls$clustering) -> cls1
+silhouette(pcls) -> scls #Cluster Validation (closer to 1, the better.)
+plot(scls, ask = T)
+
+
+#Plot Clusters
+par(mar = c(4,4,2,1)+.1)
+plot(cls1[,xcol],cls1[,ycol], xlab=names(cls1)[xcol], ylab=names(cls1)[ycol], type = "n", main = paste(names(cls1)[xcol],"Vs", names(cls1)[ycol]) , cex.axis = .75, cex.lab = .75, cex.main = .75)->p
+colo = c(4,3,2,7,9:25);pts = c(21:25,1:20);
+
+for(i in 1:nclus){
+cls1[cls1[,3]==i,]->splt
+points(splt[,1], splt[,2], col = colo[i], pch = pts[1], cex = .8)
+}
+
+points(pcls$medoids[,1],pcls$medoids[,2], col = 9, pch = 21, cex = 2.5)
+text(pcls$medoids[,1],pcls$medoids[,2], matrix(1:nclus, ncol=1), cex = .8)
+
+write.csv(cls1,"clusters.csv")
+table(cls1[,3])
+}
+
+clust(data = cls, nclus = 4, xcol= 1, ycol = 2)
