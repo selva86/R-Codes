@@ -1,0 +1,21 @@
+# Create Lags for all the indicators starting from 2nd column
+
+setwd("C:/Users/sanjes/Desktop/work")
+inp<- read.csv("ForecastModelTraining.csv")
+RES<-data.frame(inp)
+FINRES<- data.frame(inp[,1])
+
+#Create 12 Lags
+for (i in c(2:ncol(RES))){
+temp<- RES[,i]
+
+T<-matrix(temp, nrow= length(temp))
+T1<-matrix(nrow=nrow(T))
+for (j in c(1:12)){
+T1<-c(rep(NA,j),T[1:(nrow(T)-j)])
+T<-cbind(T,T1)
+}
+colnames(T)<-paste(rep(names(RES)[i],13), c(0:12), sep="")
+FINRES<-(cbind(FINRES,T))
+}
+write.csv(FINRES, "Lagoutput.csv")
