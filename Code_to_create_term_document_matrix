@@ -1,0 +1,26 @@
+#Author: Selva Prabhakaran
+#Date: 2 June 2013
+#Purpose: Create a row wise term document matrix against a master list of words in the entire document as the columns.
+
+setwd("C:\\Users\\sanjes\\Desktop\\Work\\")
+dat <- read.csv("functional_req1.csv")
+
+#Create master list of words in the entire document
+masterwords <- character()
+for (i in (1:nrow(dat))){
+a <- strsplit(as.character(dat[i,1]), " ")
+masterwords <- sort(union(unlist(a[1]), masterwords))
+}
+
+# Form the mastertable
+mastertable <- matrix(ncol = length(masterwords))
+colnames(mastertable) <- masterwords
+
+for(i in c(1:nrow(dat))){
+a <- strsplit(as.character(dat[i,1]), " ")
+taba <- table(a[1])
+# Assign each word repeats into the master table
+	for (j in c(1:length(taba))){
+		mastertable(i,names(taba)[j]) <- taba[j]
+	}
+}
